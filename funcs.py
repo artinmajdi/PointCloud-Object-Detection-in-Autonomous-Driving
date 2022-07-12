@@ -1,3 +1,4 @@
+from matplotlib.ft2font import FIXED_SIZES
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -5,7 +6,6 @@ import open3d
 import pptk
 from logging import raiseExceptions
 import seaborn as sns
-
 
 import tensorflow as tf
 from tensorflow.keras import layers, models, optimizers, datasets, metrics
@@ -55,6 +55,32 @@ class Optimization():
 
 class DataLoader():
 
+    '''
+        'Range' = sqrt(x^2 + y^2 + z^2)
+        'RCS'   =  20log( 'Amplitude' )
+        'Index' is the rounded values for each feature. e.g.,
+            - The 'Velocity' resolution is 0.16, hence the 'Velocity Index' = int(Velocity / 0.16).
+            - The 'Azimuth' resolution is 1, hence the 'Azimuth Index' = int(Azimuth).
+            - The 'Elevation' resolution is 1, hence the 'Elevation Index' = int(Elevation).
+            - The 'Range' resolution is 0.5859, hence the 'Range Index' = int(Range / 0.5859). '''
+
+
+    SCALE_BIAS = {
+        'Range':{'Scale':600 , 'Min':0},
+        'Azimuth':{'Scale':180 , 'Min':0},
+        'Elevation':{'Scale':20 , 'Min':10},
+        'Velocity':{'Scale':200 , 'Min':100},
+        'RCS':{'Scale':100 , 'Min':0},
+        'Amplitude':{'Scale':1e5 , 'Min':0},
+        }
+
+    ORIGINAL_COLUMNS = {
+        'Radar':['Frame ID', 'Pocket ID' , 'Y', 'X', 'Z', 'Range', 'Azimuth Angle', 'Elevation Angle', 'RCS' , 'Velocity' , 'Range Index', 'Azimuth Index', 'Elevation Index', 'Velocity Index', 'Amplitude Index', 'Timestamp', 'Temperature', '?'],
+        'Lidar':['Y', 'X', 'Z', 'RCS' , 'Timestamp' , '?c'] }
+
+    COLUMNS_RENAMING_MAPS = {'Range Index':'Range', 'Azimuth Index':'Azimuth', 'Elevation Index':'Elevation', 'RCS':'RCS'} # , 'Velocity Index':'Velocity'
+
+
     def __init__(self, modality = 'Radar', data_type='vector', normalize=True , dataset_directory='/home/artin/Documents/10dB_CR_10deg_in_2021-10-15-14-15-49', train_valid_test_ratio=[0.6, 0.2, 0.2]):
 
         self.dataset_directory = dataset_directory
@@ -64,100 +90,119 @@ class DataLoader():
         self.train_valid_test_ratio = train_valid_test_ratio
         self.data = None
 
-        if modality == 'Radar':
-            self.columns = ['Frame ID', 'Pocket ID' , 'Y', '-X', 'Z', 'Range', 'Azimuth Angle', 'Elevation Angle', 'RCS' , 'Velocity' , 'Range Index', 'Azimuth Index', 'Elevation Index', 'Velocity Index', 'Amplitude Index', 'Timestamp', 'Temperature', '?']
-            self.rename_columns_dict = {'Range Index':'Range', 'Azimuth Index':'Azimuth', 'Elevation Index':'Elevation', 'Amplitude Index':'Amplitude', 'RCS':'RCS', 'Velocity Index':'Velocity'}
 
-        elif modality == 'Lidar':
-            self.columns = ['X', 'Y', 'Z', '?a' , '?b' , '?c']
-            self.rename_columns_dict =  {'X':'X', 'Y':'Y', 'Z':'Z', '?a':'?a', '?b':'?b' , '?c':'?c'}
+    @staticmethod
+    def lidar_cartesian_to_spherical(dataframe: pd.DataFrame):
+
+        ''' dataframe should contain ['X', 'Y', 'Z', 'RCS'] columns. '''
+
+        for name in ['X','Y','Z','RCS']:
+            assert name in dataframe.columns, f'{name} is not in the dataframe'
+
+
+        # converting x,y,z to spherical angles/ranges
+        df, _ = cartesian_to_spherical(xyz = dataframe[['X','Y','Z']].to_numpy())
+
+        # merging the spherical coordinates and the original dataframe
+        df = pd.concat([dataframe[['Timestamp' , 'RCS']], df], axis=1)
+
+        # For details of the reason behind below calculations refer to the class docstring
+        df['Azimuth Index']   = df['Azimuth Angle'].round()
+        df['Elevation Index'] = df['Elevation Angle'].round().astype(int)
+        df['Range Index']     = (df['Range'] / 0.5859).round().astype(int)
+        df['Amplitude Index'] = np.power( df['RCS'] / 20.0 , 10 )
+
+        return df
+
+    @staticmethod
+    def detect_and_remove_duplicated_points(df: pd.DataFrame):
+
+        # First we sort the values based on RCS
+        df.sort_values(by=['RCS'], inplace=True)
+
+        # Then we remove all the duplicate rows (similar Azimuth and Elevation) except for the
+        # last occurance (which has the highest RCS due to previous step sorting)
+        df.drop_duplicates( subset=['Azimuth','Elevation'], keep='last', inplace=True)
+
+        # Finaly sort the dataframe back to its original index order
+        df.sort_index(inplace=True)
+
+        return df
+
 
     def get_dataframe(self, dir: str):
 
         def _read_data(dir):
             self.dataframe_original = pd.read_csv(dir)
-            self.dataframe_original.columns = self.columns
+            self.dataframe_original.columns = self.ORIGINAL_COLUMNS[self.modality]
             self.dataframe = self.dataframe_original.copy()
 
-        def _filter_columns(columns: list):
-            self.dataframe = self.dataframe[columns]
-
-        def _rename_columns(columns: dict):
-            self.dataframe.rename(columns=columns, inplace=True)
-
         _read_data(dir=dir)
-        _filter_columns( columns=self.rename_columns_dict.keys() )
-        _rename_columns( columns=self.rename_columns_dict )
+
+        # Converting Lidar cartesian coordinates to spherical
+        if self.modality == 'Lidar':
+            self.dataframe = self.lidar_cartesian_to_spherical(dataframe=self.dataframe)
+
+        # Fitler columns
+        self.dataframe = self.dataframe[ self.COLUMNS_RENAMING_MAPS.keys() ]
+
+        # Rename columns
+        self.dataframe.rename(columns=self.COLUMNS_RENAMING_MAPS, inplace=True)
+
+        # remove_duplicates
+        self.dataframe2 = self.detect_and_remove_duplicated_points(df=self.dataframe.copy())
+
+
+        # # Normalizing the dataframe
+        # self._normalizing_each_column_to_0_1(scale_bias=self.SCALE_BIAS)
+
+        # Splitting the data into train, valid and test.
+        # # self.data = self.Data(data_raw=self.dataframe, train_valid_test_ratio=self.train_valid_test_ratio)
+
+
+    def _normalizing_each_column_to_0_1(self, scale_bias={'feature1':{'Scale':1,'Min':0}}):
+
+        for name in scale_bias:
+            if name in self.dataframe.columns:
+                A, mn = scale_bias[name]['Scale'], scale_bias[name]['Min']
+                self.dataframe[name] = (self.dataframe[name] - mn) / A
+
+
 
     def get_data(self, filename = '1_.txt'):
-        ''' data_type can be 'vector' or 'matrix' '''
 
-        dir = f'{self.dataset_directory}/{self.modality}/{filename}'
+        # Getting the dataframe
+        self.get_dataframe( dir=f'{self.dataset_directory}/{self.modality}/{filename}' )
 
-        self.get_dataframe(dir=dir)
-
-        data_raw = self.postprocess_dataframe(modality=self.modality, normalize=self.normalize)
-
-        # Puting the data into a class and splitting the data into train, valid and test.
-        self.data = self.Data(data_raw=data_raw, train_valid_test_ratio=self.train_valid_test_ratio)
-
-        return self.data
-
-    def postprocess_dataframe(self, modality='Radar', normalize=True):
-
-        def conversion_to_3D( matrix_dimensions={'Range':600, 'Azimuth':180, 'Elevation':20}, matrix_value='Amplitude'):
-
-            ''' Range is assumed to be in the range [0, 600]
-                Elevation Angle is in the range [-10, 10]
-                Azimuth angle is in the range [0, 180]
-                matrix_value can either be an integer/float or a string that corresponds to a column name. It's value will be used to fill the matrix. '''
-
-            # Creating an empty array to store the data
-            self.data_matrix = np.zeros( list(matrix_dimensions.values()) )
-
-            # Shifting the Elevation values to the range (0, 20)
-            self.dataframe.Elevation += 10
+        # # Converting the dataframe to a matrix
+        # if self.data_type == 'matrix':
+        #     self.data_matrix = self.vector_to_matrix_convertion()
 
 
-            # dimension = len(self.data_matrix.shape)
-
-            for _, row in self.dataframe.iterrows():
-
-                self.data_matrix[ tuple( row[matrix_dimensions.keys()].astype(int).to_list() ) ] = row[matrix_value] if isinstance(matrix_value,str) else matrix_value
-
-                # if dimension == 3:
-                #     self.data_matrix [ int(row[x]) ] [ int(row[y]) ] [ int(row[z]) ] = row[matrix_value] if isinstance(matrix_value,str) else matrix_value
-                #     x,y,z = matrix_dimensions.keys()
-
-                # elif dimension == 2:
-                #     self.data_matrix [ int(row[x]) ] [ int(row[y]) ] = row[matrix_value] if isinstance(matrix_value,str) else matrix_value
-                #     x,y = matrix_dimensions.keys()
+        # return self.data
 
 
-            return self.data_matrix
 
-        def normalizing_to_0_1( normalization_values = {'Range':1000, 'Azimuth':180, 'Elevation':20, 'RCS':100, 'Velocity':200, 'Amplitude':100000} ):
+    def vector_to_matrix_convertion(self):
+        ''' source_dataframe_columns Examples:
+                'Cartesian': ['X', 'Y', 'Z']
+                'Spherical': ['Range','Azimuth','Elevation']
+        '''
+
+        # Creating an empty array to store the data
+
+        if self.modality == 'Radar':
+            coordinates_columns = []
+
+        self.data_matrix = np.zeros( list(matrix_dimensions.values()) )
 
 
-            for key, value in normalization_values.items():
-                self.dataframe[key] /= value
+        for _, row in self.dataframe.iterrows():
 
-            self.dataframe.Elevation += 0.5
-            self.dataframe.Velocity  += 0.5
+            self.data_matrix[ tuple( row[matrix_dimensions.keys()].astype(int).to_list() ) ] = row[matrix_value] if isinstance(matrix_value,str) else matrix_value
 
-            return self.dataframe
+        return self.data_matrix
 
-
-        if modality == 'Radar':
-
-            if self.data_type == 'vector':  return normalizing_to_0_1() if self.normalize else self.dataframe
-
-            elif self.data_type == 'matrix': return conversion_to_3D( matrix_dimensions={'Azimuth':180, 'Elevation':20}, matrix_value='Range')
-
-            else: raise ValueError('data_type can be either "vector" or "matrix"')
-
-        elif modality == 'Lidar':
-            return self.dataframe
 
     class Data:
         def __init__(self, data_raw=None , train_valid_test_ratio: list=[3,1,1]):
@@ -192,24 +237,7 @@ class DataLoader():
         def shape(self):
             return self.full.shape
 
-    @staticmethod
-    def appendSpherical_np(xyz):
 
-        ptsnew = np.hstack((xyz, np.zeros(xyz.shape)))
-
-        xy = xyz[:,0]**2 + xyz[:,1]**2
-
-        ptsnew[:,3] = np.sqrt(xy + xyz[:,2]**2)
-
-        # for elevation angle defined from Z-axis down
-        # ptsnew[:,4] = np.arctan2(np.sqrt(xy), xyz[:,2])
-
-        # for elevation angle defined from XY-plane up
-        ptsnew[:,4] = np.arctan2(xyz[:,2], np.sqrt(xy))
-
-        ptsnew[:,5] = np.arctan2(xyz[:,1], xyz[:,0])
-
-        return ptsnew
 
     @classmethod
     def visualize(cls, points=None, method='open3d', run_demo=False, modality='Lidar', filename='1_.txt'):
@@ -245,6 +273,50 @@ class DataLoader():
             raiseExceptions('method should be either "open3d" or "pptk"')
 
 
+def cartesian_to_spherical(xyz: np.ndarray) -> pd.DataFrame:
+
+    def calculate_elevation_angle():
+
+        xy = np.sqrt( xyz[:,0]**2 + xyz[:,1]**2 )
+
+        z = xyz[:,2]
+
+        elevation_angle_defined = {'from Z-axis down': np.arctan2(xy, z),
+                                    'from XY-plane up': np.arctan2(z, xy)}
+
+        return elevation_angle_defined['from XY-plane up'] * 180 / 3.14
+
+
+    assert xyz.shape[1] == 3, 'xyz must be a numpy array of shape (n,3)'
+
+
+    from collections import namedtuple
+
+    Desc = namedtuple('Desc', ['Range', 'Elevation', 'Azimuth'])
+
+    ptsnew = np.hstack((xyz, np.zeros(xyz.shape)))
+
+    # Range: sqrt(x^2 + y^2 + z^2)
+    ptsnew[:,3] = np.sqrt( xyz[:,0]**2 + xyz[:,1]**2 + xyz[:,2]**2 )
+
+    Desc.Range = ptsnew[:,3]
+
+    # Elevation Angle: arctan( sqrt(x^2 + y^2) / z )
+    ptsnew[:,4] = calculate_elevation_angle()
+
+    Desc.Elevation = ptsnew[:,4]
+
+    # Azimuth Angle: arctan(y/x)
+    ptsnew[:,5] = np.arctan2(xyz[:,1], xyz[:,0]) * 180 / 3.14
+
+    Desc.Azimuth = ptsnew[:,5]
+
+    # Creating the dataframe
+    ptsnew = pd.DataFrame(ptsnew, columns=['X', 'Y', 'Z', 'Range', 'Elevation Angle', 'Azimuth Angle'])
+
+    return ptsnew, Desc
+
+
 class VectorInput(DataLoader, Optimization):
 
     def __init__(self, dataset_directory='/home/artin/Documents/10dB_CR_10deg_in_2021-10-15-14-15-49' , modality='Radar', normalize=True, filename='1_.txt', train_valid_test_ratio=[3,1,1]):
@@ -270,6 +342,7 @@ class MatrixInput(DataLoader, Optimization):
 
         # Loading the data
         DataLoader.__init__(self, data_type='matrix' , modality=modality, dataset_directory=dataset_directory, normalize=True, train_valid_test_ratio=train_valid_test_ratio)
+
         self.get_data(filename=filename)
 
         # Getting the architecture of the model
