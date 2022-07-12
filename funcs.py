@@ -10,39 +10,83 @@ import seaborn as sns
 import tensorflow as tf
 from tensorflow.keras import layers, models, optimizers, datasets, metrics
 from collections import namedtuple
+from glob import glob
+import tensorflow as tf
+
 
 
 class Optimization():
 
-    def __init__(self):
-        self.model = None
+    def __init__(self, input_shape=None, mode='vector'):
+
+        self.mode = mode
+        self.model = self.architecture(input_shape=input_shape)
+
 
     def fit(self, epochs=5, batch_size=32, train=None, valid=None):
 
-        self.model = self.architecture(input_shape=(train.shape[1],1))
+        if self.mode == 'vector' or isinstance(train, np.ndarray) or isinstance(train, pd.DataFrame):
+            self.model.fit(x=train, y=train, epochs=epochs, batch_size=batch_size, validation_data=(valid, valid))
 
-        self.model.fit(x=train, y=train, epochs=epochs, batch_size=batch_size, validation_data=(valid, valid))
+        else:
+            self.model.fit(train, epochs=epochs, batch_size=batch_size, validation_data=valid)
 
-    def architecture(self, input_shape: tuple):
+    def architecture(self, input_shape: tuple=None):
 
-        input = layers.Input(shape=input_shape)
+        def vector_autoencoder():
+            input = layers.Input(shape=input_shape)
 
-        # Encoder
-        x = layers.Conv1D(filters=256, kernel_size=3, strides=1, padding='same', activation='relu')(input)
-        x = layers.Conv1D(filters=512, kernel_size=3, strides=1, padding='same', activation='relu')(x)
-        x = layers.Conv1D(filters=512, kernel_size=3, strides=2, padding='same', activation='relu')(x)
+            # Encoder
+            x = layers.Conv1D(filters=256, kernel_size=3, strides=1, padding='same', activation='relu')(input)
+            x = layers.Conv1D(filters=512, kernel_size=3, strides=1, padding='same', activation='relu')(x)
+            x = layers.Conv1D(filters=512, kernel_size=3, strides=2, padding='same', activation='relu')(x)
 
-        # Decoder
-        x = layers.Conv1DTranspose(filters=256, strides=2, kernel_size=3, padding='same', activation='relu')(x)
-        x = layers.Conv1DTranspose(filters=256, strides=1, kernel_size=3, padding='same', activation='relu')(x)
-        x = layers.Conv1DTranspose(filters=1,   strides=1, kernel_size=3, padding='same', activation='sigmoid')(x)
+            # Decoder
+            x = layers.Conv1DTranspose(filters=256, strides=2, kernel_size=3, padding='same', activation='relu')(x)
+            x = layers.Conv1DTranspose(filters=256, strides=1, kernel_size=3, padding='same', activation='relu')(x)
+            x = layers.Conv1DTranspose(filters=1,   strides=1, kernel_size=3, padding='same', activation='sigmoid')(x)
 
 
-        # Autoencoder
-        model = models.Model(input, x)
-        model.compile(optimizer="adam", loss="binary_crossentropy")
+            # Autoencoder
+            model = models.Model(input, x)
+            model.compile(optimizer="adam", loss="binary_crossentropy")
 
-        return model
+            return model
+
+        def matrix_autoencoder():
+            input = layers.Input(shape=input_shape)
+
+            # Encoder
+            x = layers.Conv2D(16, (3, 3), activation='relu', padding='same')(input)
+            x = layers.MaxPooling2D((2, 2), padding='same')(x)
+            x = layers.Conv2D(8, (3, 3), activation='relu', padding='same')(x)
+            x = layers.MaxPooling2D((2, 2), padding='same')(x)
+            x = layers.Conv2D(8, (3, 3), activation='relu', padding='same')(x)
+            encoded = layers.MaxPooling2D((2, 2), padding='same')(x)
+
+            # at this point the representation is (4, 4, 8) i.e. 128-dimensional
+
+            x = layers.Conv2D(8, (3, 3), activation='relu', padding='same')(encoded)
+            x = layers.UpSampling2D((2, 2))(x)
+            x = layers.Conv2D(8, (3, 3), activation='relu', padding='same')(x)
+            x = layers.UpSampling2D((2, 2))(x)
+            x = layers.Conv2D(16, (3, 3), activation='relu')(x)
+            x = layers.UpSampling2D((2, 2))(x)
+            decoded = layers.Conv2D(1, (3, 3), activation='sigmoid', padding='same')(x)
+
+            # Autoencoder
+            model = models.Model(input, decoded)
+            model.compile(optimizer='adam', loss='binary_crossentropy')
+
+            return model
+
+        if self.mode == 'vector':
+            return vector_autoencoder()
+
+        elif self.mode == 'matrix':
+            return matrix_autoencoder()
+
+
 
     def predict(self, test):
 
@@ -83,42 +127,16 @@ class DataLoader():
     COLUMNS_RENAMING_MAPS = {'Range Index':'Range', 'Azimuth Index':'Azimuth', 'Elevation Index':'Elevation', 'RCS':'RCS'} # , 'Velocity Index':'Velocity'
 
 
-    def __init__(self, modality = 'Radar', data_type='vector', normalize=True , dataset_directory='/home/artin/Documents/10dB_CR_10deg_in_2021-10-15-14-15-49', train_valid_test_ratio=[0.6, 0.2, 0.2]):
+    def __init__(self, modality = 'Radar', data_type='vector', dataset_directory='/home/artin/Documents/10dB_CR_10deg_in_2021-10-15-14-15-49'):
 
         self.dataset_directory = dataset_directory
         self.modality = modality
         self.data_type = data_type
-        self.normalize = normalize
-        self.train_valid_test_ratio = train_valid_test_ratio
-        self.data = None
+
 
 
     @staticmethod
-    def lidar_cartesian_to_spherical(dataframe: pd.DataFrame):
-
-        ''' dataframe should contain ['X', 'Y', 'Z', 'RCS'] columns. '''
-
-        for name in ['X','Y','Z','RCS']:
-            assert name in dataframe.columns, f'{name} is not in the dataframe'
-
-
-        # converting x,y,z to spherical angles/ranges
-        Range, Elevation, Azimuth = cartesian_to_spherical(x=dataframe.X , y=dataframe.Y , z=dataframe.Z )
-
-        # merging the spherical coordinates and the original dataframe
-        df = dataframe.copy()
-
-        # For details of the reason behind below calculations refer to the class docstring
-        df['Azimuth Index']   = Azimuth.round()
-        df['Elevation Index'] = Elevation.round().astype(int)
-        df['Range Index']     = (Range / 0.5859).round().astype(int)
-        df['Amplitude Index'] = np.power( df['RCS'] / 20.0 , 10 )
-
-        return df
-
-
-    @staticmethod
-    def detect_and_remove_duplicated_points(df: pd.DataFrame):
+    def remove_duplicated_bird_pov_points(df: pd.DataFrame):
 
         # First we sort the values based on RCS
         df.sort_values(by=['RCS'], inplace=True)
@@ -145,7 +163,7 @@ class DataLoader():
 
         # Converting Lidar cartesian coordinates to spherical
         if self.modality == 'Lidar':
-            self.dataframe = self.lidar_cartesian_to_spherical(dataframe=self.dataframe)
+            self.dataframe = self.converting_lidar_to_looklike_radar(dataframe=self.dataframe)
 
         # Removing unnecessary columns
         self.dataframe = self.dataframe[ self.COLUMNS_RENAMING_MAPS.keys() ]
@@ -154,7 +172,7 @@ class DataLoader():
         self.dataframe.rename(columns=self.COLUMNS_RENAMING_MAPS, inplace=True)
 
         # remove_duplicates
-        self.dataframe = self.detect_and_remove_duplicated_points(df=self.dataframe.copy())
+        self.dataframe = self.remove_duplicated_bird_pov_points(df=self.dataframe.copy())
 
         # Normalize the data to > 0 according to SCALE_BIAS
         for name in set(self.SCALE_BIAS.keys())  &  set(self.dataframe.columns):
@@ -165,11 +183,6 @@ class DataLoader():
         # if self.modality == 'Lidar':
         self._filtering_values_outside_specified_range()
 
-        # Normalizing the dataframe
-        # self._normalizing_each_column_to_0_1(scale_bias=self.SCALE_BIAS)
-
-        # Splitting the data into train, valid and test.
-        # # self.data = self.Data(data_raw=self.dataframe, train_valid_test_ratio=self.train_valid_test_ratio)
 
     def _filtering_values_outside_specified_range(self):
 
@@ -194,9 +207,11 @@ class DataLoader():
         # Getting the dataframe
         self.get_dataframe( dir=f'{self.dataset_directory}/{self.modality}/{filename}' )
 
-        # # Converting the dataframe to a matrix
+        # Converting the dataframe to a matrix
         if self.data_type == 'matrix':
-            self.data_matrix = self.vector_to_matrix_convertion(matrix_value='RCS')
+            return self.vector_to_matrix_convertion(matrix_value='RCS')
+
+        return self.dataframe
 
 
     def vector_to_matrix_convertion(self, matrix_value='RCS'):
@@ -212,47 +227,12 @@ class DataLoader():
         return self.data_matrix
 
 
-    class Data:
-        def __init__(self, data_raw=None , train_valid_test_ratio: list=[3,1,1]):
-            self.full  = data_raw
-            self.train = None
-            self.valid = None
-            self.test  = None
-
-            self._separate_train_valid_test_only_for_dataframe(train_valid_test_ratio=train_valid_test_ratio)
-
-        def _separate_train_valid_test_only_for_dataframe(self, train_valid_test_ratio=None):
-
-            if train_valid_test_ratio is None:
-                return
-
-            data = self.full.copy()
-
-            frac = {}
-            for ix, mode in enumerate(['train' , 'valid' , 'test']):
-                frac[mode] = train_valid_test_ratio[ix]/sum(train_valid_test_ratio)
-
-
-            self.train = data.sample(frac=frac['train'], random_state=42)
-            data.drop(self.train.index)
-
-            self.valid = data.sample(frac=frac['valid'], random_state=42)
-            data.drop(self.valid.index)
-
-            self.test  = data.copy()
-
-        @property
-        def shape(self):
-            return self.full.shape
-
-
-
     @staticmethod
     def visualize(points=None, spherical=True, method='open3d'):
 
         # Converting the spherical coordinates to cartesian
         if spherical:
-            x,y,z = spherical_to_cartesian(Azimuth_Angle=points.Azimuth , Elevation_Angle=points.Elevation , Range=points.Range)
+            x,y,z = DataLoader().spherical_to_cartesian(Azimuth_Angle=points.Azimuth , Elevation_Angle=points.Elevation , Range=points.Range)
             points = np.array([x,y,z]).T
         else:
             x,y,z = points.values()
@@ -275,51 +255,80 @@ class DataLoader():
             raiseExceptions('method should be either "open3d" or "pptk"')
 
 
-def cartesian_to_spherical(x, y, z):
+    @staticmethod
+    def converting_lidar_to_looklike_radar(dataframe: pd.DataFrame):
 
-    def calculate_elevation_angle():
+        ''' dataframe should contain ['X', 'Y', 'Z', 'RCS'] columns. '''
 
-        xy = np.sqrt( x**2 + y**2 )
-
-        elevation_angle_defined = {'from Z-axis down': np.arctan2(xy, z),
-                                    'from XY-plane up': np.arctan2(z, xy)}
-
-        return elevation_angle_defined['from XY-plane up'] * 180 / 3.14
+        for name in ['X','Y','Z','RCS']:
+            assert name in dataframe.columns, f'{name} is not in the dataframe'
 
 
-    # Range: sqrt(x^2 + y^2 + z^2)
-    Range = np.sqrt( x**2 + y**2 + z**2 )
+        # converting x,y,z to spherical angles/ranges
+        Range, Elevation, Azimuth = DataLoader().cartesian_to_spherical(x=dataframe.X , y=dataframe.Y , z=dataframe.Z )
 
-    # Elevation Angle (theta): arctan( sqrt(x^2 + y^2) / z )
-    Elevation = calculate_elevation_angle()
+        # merging the spherical coordinates and the original dataframe
+        df = dataframe.copy()
 
-    # Azimuth Angle (phi): arctan(y/x)
-    Azimuth = np.arctan2(y, x) * 180 / 3.14
+        # For details of the reason behind below calculations refer to the class docstring
+        df['Azimuth Index']   = Azimuth.round()
+        df['Elevation Index'] = Elevation.round().astype(int)
+        df['Range Index']     = (Range / 0.5859).round().astype(int)
+        df['Amplitude Index'] = np.power( df['RCS'] / 20.0 , 10 )
 
-    return Range, Elevation, Azimuth
+        return df
 
 
-def spherical_to_cartesian(Azimuth_Angle, Elevation_Angle, Range):
+    @staticmethod
+    def cartesian_to_spherical(x, y, z):
 
-    Azimuth_Angle = Azimuth_Angle * 3.14 / 180
-    Elevation_Angle = Elevation_Angle * 3.14 / 180
+        def calculate_elevation_angle():
 
-    x = Range * np.cos(Azimuth_Angle) * np.cos(Elevation_Angle)
-    y = Range * np.sin(Azimuth_Angle) * np.cos(Elevation_Angle)
-    z = Range * np.sin(Elevation_Angle)
+            xy = np.sqrt( x**2 + y**2 )
 
-    return x,y,z
+            elevation_angle_defined = {'from Z-axis down': np.arctan2(xy, z),
+                                        'from XY-plane up': np.arctan2(z, xy)}
+
+            return elevation_angle_defined['from XY-plane up'] * 180 / 3.14
+
+
+        # Range: sqrt(x^2 + y^2 + z^2)
+        Range = np.sqrt( x**2 + y**2 + z**2 )
+
+        # Elevation Angle (theta): arctan( sqrt(x^2 + y^2) / z )
+        Elevation = calculate_elevation_angle()
+
+        # Azimuth Angle (phi): arctan(y/x)
+        Azimuth = np.arctan2(y, x) * 180 / 3.14
+
+        return Range, Elevation, Azimuth
+
+    @staticmethod
+    def spherical_to_cartesian(Azimuth_Angle, Elevation_Angle, Range):
+
+        Azimuth_Angle = Azimuth_Angle * 3.14 / 180
+        Elevation_Angle = Elevation_Angle * 3.14 / 180
+
+        x = Range * np.cos(Azimuth_Angle) * np.cos(Elevation_Angle)
+        y = Range * np.sin(Azimuth_Angle) * np.cos(Elevation_Angle)
+        z = Range * np.sin(Elevation_Angle)
+
+        return x,y,z
+
 
 class VectorInput(DataLoader, Optimization):
 
-    def __init__(self, dataset_directory='/home/artin/Documents/10dB_CR_10deg_in_2021-10-15-14-15-49' , modality='Radar', normalize=True, filename='1_.txt', train_valid_test_ratio=[3,1,1]):
+    def __init__(self, dataset_directory='/home/artin/Documents/10dB_CR_10deg_in_2021-10-15-14-15-49' , modality='Radar', normalize=True, filename='1_.txt'):
 
         # Loading the data
-        DataLoader.__init__( self, data_type='vector' , dataset_directory=dataset_directory, modality=modality, normalize=normalize, train_valid_test_ratio=train_valid_test_ratio)
+        DataLoader.__init__( self, data_type='vector' , dataset_directory=dataset_directory, modality=modality)
+
         self.get_data(filename=filename)
 
+        self.data = self.split_dataset(dataframe=self.dataframe.copy())
+
         # Getting the architecture of the model
-        Optimization.__init__(self)
+        Optimization.__init__( self, input_shape=(self.data.train.shape[1],1) )
 
         # Training the model
         self.fit(epochs=5, batch_size=32, train=self.data.train, valid=self.data.valid)
@@ -328,24 +337,97 @@ class VectorInput(DataLoader, Optimization):
         self.prediction = self.predict(test=self.data.test)
 
 
+    @staticmethod
+    def split_dataset(dataframe, train_valid_test_ratio=[3,1,1]):
+
+        if train_valid_test_ratio is None:
+            return
+
+        frac = {}
+        for ix, mode in enumerate(['train' , 'valid' , 'test']):
+            frac[mode] = train_valid_test_ratio[ix]/sum(train_valid_test_ratio)
+
+
+        train = dataframe.sample(frac=frac['train'], random_state=42)
+        dataframe.drop(train.index, inplace=True)
+
+        valid = dataframe.sample(frac=frac['valid'], random_state=42)
+        dataframe.drop(valid.index, inplace=True)
+
+        data = namedtuple('data', ['train', 'valid', 'test'])
+        return data(train=train, valid=valid, test=dataframe)
+
+
 class MatrixInput(DataLoader, Optimization):
 
-    def __init__(self, dataset_directory='/home/artin/Documents/10dB_CR_10deg_in_2021-10-15-14-15-49' , modality='Radar', train_valid_test_ratio=None, normalize=True, filename='1_.txt'):
+    def __init__(self, dataset_directory='/home/artin/Documents/10dB_CR_10deg_in_2021-10-15-14-15-49' , modality='Radar', normalize=False):
 
         # Loading the data
-        DataLoader.__init__(self, data_type='matrix' , modality=modality, dataset_directory=dataset_directory, normalize=True, train_valid_test_ratio=train_valid_test_ratio)
+        DataLoader.__init__(self, data_type='matrix' , modality=modality, dataset_directory=dataset_directory)
 
-        self.get_data(filename=filename)
+        tfdataset = self.load_dataset(max_limit=15)
+
+        self.data = self.split_dataset(tfdataset=tfdataset)
+
 
         # Getting the architecture of the model
-        # Optimization.__init__(self)
+        Optimization.__init__(self, input_shape=self.data.train.element_spec[0].shape)
 
         # Training the model
-        # self.fit(epochs=5, batch_size=32, train=self.data.train, valid=self.data.valid)
+        self.fit(epochs=5, batch_size=32, train=self.data.train, valid=self.data.valid)
 
         # Testing the model
         # self.predictions = self.predict(test=self.data.test)
 
+
+    def load_dataset(self, max_limit=None):
+
+        list_frames = glob(f'{self.dataset_directory}/{self.modality}/*.txt')
+
+        list_frames = [i.split(sep='/')[-1] for i in list_frames]
+
+        if max_limit is not None:
+            list_frames = list_frames[:max_limit]
+
+        dataset = np.zeros( ( len(list_frames), self.SCALE_BIAS['Elevation'].Scale , self.SCALE_BIAS['Azimuth'].Scale ))
+
+        for i, filename in enumerate(list_frames):
+
+            dataset[i,...] = self.get_data(filename=filename)
+
+
+        # tensorflow dataset from dataframe
+        tfdataset_data  = tf.data.Dataset.from_tensor_slices(dataset)
+        tfdataset_label = tf.data.Dataset.from_tensor_slices(dataset)
+
+        tfdataset = tf.data.Dataset.zip((tfdataset_data, tfdataset_label))
+
+        tfdataset.shuffle(seed=10, buffer_size=len(list_frames))
+
+        # view the values in dataset
+        # for x in tfdataset.take(3):
+        #     print(x.shape)
+
+        return tfdataset
+
+    @staticmethod
+    def split_dataset(tfdataset, train_valid_test_ratio=[3,1,1]):
+
+        if train_valid_test_ratio is None:
+            return
+
+        frac = {}
+        for ix, mode in enumerate(['train' , 'valid' , 'test']):
+            ratio = train_valid_test_ratio[ix]/sum(train_valid_test_ratio)
+            frac[mode] = int(ratio * tfdataset.cardinality().numpy())
+
+
+        train = tfdataset.take(frac['train'])
+        valid = tfdataset.skip(frac['train']).take(frac['valid'])
+        test  = tfdataset.skip(frac['train']).skip(frac['valid'])
+
+        data = namedtuple('data', ['train', 'valid', 'test'])
+        return data(train=train, valid=valid, test=test)
 
 
 
