@@ -25,11 +25,11 @@ class Optimization():
 
     def fit(self, epochs=5, batch_size=32, train=None, valid=None):
 
-        if self.mode == 'vector' or isinstance(train, np.ndarray) or isinstance(train, pd.DataFrame):
-            self.model.fit(x=train, y=train, epochs=epochs, batch_size=batch_size, validation_data=(valid, valid))
+        # if self.mode == 'vector' or isinstance(train, np.ndarray) or isinstance(train, pd.DataFrame):
+        self.model.fit(x=train, y=train, epochs=epochs, batch_size=batch_size, validation_data=(valid, valid))
 
-        else:
-            self.model.fit(train, epochs=epochs, batch_size=batch_size, validation_data=valid)
+        # else:
+        #     self.model.fit(train, epochs=epochs, batch_size=batch_size, validation_data=valid)
 
 
     def architecture(self, input_shape: tuple=None):
@@ -365,20 +365,24 @@ class MatrixInput(DataLoader, Optimization):
         # Loading the data
         DataLoader.__init__(self, data_type='matrix' , modality=modality, dataset_directory=dataset_directory)
 
-        tfdataset = self.load_dataset(max_limit=15)
+        tfdataset, dataset = self.load_dataset(max_limit=1000)
 
         self.data = self.split_dataset(tfdataset=tfdataset)
 
+        dataset /= 95
+        self.dataset = dataset
 
         # Getting the architecture of the model
         input_shape = list(self.data.train.element_spec[0].shape)
         Optimization.__init__(self, input_shape=input_shape, mode='matrix')
 
         # Training the model
-        self.fit(epochs=5, batch_size=32, train=self.data.train, valid=self.data.valid)
+        # self.fit(epochs=5, batch_size=32, train=self.data.train, valid=self.data.valid)
+        self.fit(epochs=5, batch_size=32, train=dataset, valid=dataset)
 
         # Testing the model
         # self.predictions = self.predict(test=self.data.test)
+        self.predictions = self.predict(test=dataset)
 
 
     def load_dataset(self, max_limit=None):
@@ -413,7 +417,7 @@ class MatrixInput(DataLoader, Optimization):
         # for x in tfdataset.take(3):
         #     print(x.shape)
 
-        return tfdataset
+        return tfdataset, dataset
 
     @staticmethod
     def split_dataset(tfdataset, train_valid_test_ratio=[3,1,1]):
