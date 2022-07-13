@@ -31,6 +31,7 @@ class Optimization():
         else:
             self.model.fit(train, epochs=epochs, batch_size=batch_size, validation_data=valid)
 
+
     def architecture(self, input_shape: tuple=None):
 
         def vector_autoencoder():
@@ -85,7 +86,6 @@ class Optimization():
 
         elif self.mode == 'matrix':
             return matrix_autoencoder()
-
 
 
     def predict(self, test):
@@ -371,7 +371,8 @@ class MatrixInput(DataLoader, Optimization):
 
 
         # Getting the architecture of the model
-        Optimization.__init__(self, input_shape=self.data.train.element_spec[0].shape)
+        input_shape = list(self.data.train.element_spec[0].shape)
+        Optimization.__init__(self, input_shape=input_shape, mode='matrix')
 
         # Training the model
         self.fit(epochs=5, batch_size=32, train=self.data.train, valid=self.data.valid)
@@ -395,6 +396,9 @@ class MatrixInput(DataLoader, Optimization):
 
             dataset[i,...] = self.get_data(filename=filename)
 
+        if len(dataset.shape) == 3:
+            dataset = dataset[... , np.newaxis]
+
 
         # tensorflow dataset from dataframe
         tfdataset_data  = tf.data.Dataset.from_tensor_slices(dataset)
@@ -403,6 +407,7 @@ class MatrixInput(DataLoader, Optimization):
         tfdataset = tf.data.Dataset.zip((tfdataset_data, tfdataset_label))
 
         tfdataset.shuffle(seed=10, buffer_size=len(list_frames))
+        # tfdataset.batch(batch_size=32)
 
         # view the values in dataset
         # for x in tfdataset.take(3):
