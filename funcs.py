@@ -139,23 +139,6 @@ class DataLoader():
         self.data_type = data_type
 
 
-
-    @staticmethod
-    def remove_duplicated_bird_pov_points(df: pd.DataFrame):
-
-        # First we sort the values based on RCS
-        df.sort_values(by=['RCS'], inplace=True)
-
-        # Then we remove all the duplicate rows (similar Azimuth and Elevation) except for the
-        # last occurance (which has the highest RCS due to previous step sorting)
-        df.drop_duplicates( subset=['Azimuth','Elevation'], keep='last', inplace=True)
-
-        # Finaly sort the dataframe back to its original index order
-        df.sort_index(inplace=True)
-
-        return df
-
-
     def _read_dataframe(self, dir):
         self.dataframe_original = pd.read_csv(dir)
         self.dataframe_original.columns = self.ORIGINAL_COLUMNS[self.modality]
@@ -227,7 +210,7 @@ class DataLoader():
         for _, row in self.dataframe.iterrows():
 
             # ToDo: Add 'Velocity' to the list of columns in Radar. This requires to make Radar and Lidar different dataframes
-            self.data_matrix[ int(row.Elevation) , int(row.Azimuth), : ] = [ row['RCS'] , row['Range'] , 100 / row['Range'] ] # 'Velocity'
+            self.data_matrix[ int(row.Elevation) , int(row.Azimuth), : ] = [ row['RCS'] , row['Range'] , 1 / (1 + row['Range']) ] # 'Velocity'
 
         return self.data_matrix
 
@@ -237,10 +220,11 @@ class DataLoader():
 
         # Converting the spherical coordinates to cartesian
         if spherical:
-            x,y,z = DataLoader().spherical_to_cartesian(Azimuth_Angle=points.Azimuth , Elevation_Angle=points.Elevation , Range=points.Range)
-            points = np.array([x,y,z]).T
+            df_xyz = DataLoader().spherical_to_cartesian(Azimuth_Angle=points.Azimuth , Elevation_Angle=points.Elevation , Range=points.Range)
+            points = df_xyz.values
         else:
-            x,y,z = points.values()
+            points = points.values
+
 
         if method == 'open3d':
 
@@ -316,7 +300,22 @@ class DataLoader():
         y = Range * np.sin(Azimuth_Angle) * np.cos(Elevation_Angle)
         z = Range * np.sin(Elevation_Angle)
 
-        return x,y,z
+        return pd.DataFrame({'X': x, 'Y': y, 'Z': z})
+
+    @staticmethod
+    def remove_duplicated_bird_pov_points(df: pd.DataFrame):
+
+        # First we sort the values based on RCS
+        df.sort_values(by=['RCS'], inplace=True)
+
+        # Then we remove all the duplicate rows (similar Azimuth and Elevation) except for the
+        # last occurance (which has the highest RCS due to previous step sorting)
+        df.drop_duplicates( subset=['Azimuth','Elevation'], keep='last', inplace=True)
+
+        # Finaly sort the dataframe back to its original index order
+        df.sort_index(inplace=True)
+
+        return df
 
 
 class VectorInput(DataLoader, Optimization):
@@ -368,7 +367,7 @@ class MatrixInput(DataLoader, Optimization):
         # Loading the data
         DataLoader.__init__(self, data_type='matrix' , modality=modality, dataset_directory=dataset_directory)
 
-        tfdataset, dataset = self.load_dataset(max_limit=1000)
+        tfdataset, dataset = self.load_dataset(max_limit=2000)
 
         self.data = self.split_dataset(tfdataset=tfdataset)
 
@@ -381,7 +380,7 @@ class MatrixInput(DataLoader, Optimization):
 
         # Training the model
         # self.fit(epochs=5, batch_size=32, train=self.data.train, valid=self.data.valid)
-        self.fit(epochs=20, batch_size=16, train=dataset, valid=dataset)
+        self.fit(epochs=30, batch_size=16, train=dataset, valid=dataset)
 
         # Testing the model
         # self.predictions = self.predict(test=self.data.test)
@@ -390,44 +389,66 @@ class MatrixInput(DataLoader, Optimization):
 
     def load_dataset(self, max_limit=None):
 
-        list_frames = glob(f'{self.dataset_directory}/{self.modality}/*.txt')
+        def _add_channel_dimention(dataset):
+            if len(dataset.shape) == 3:
+                dataset = dataset[... , np.newaxis]
+            return dataset
 
-        list_frames = [i.split(sep='/')[-1] for i in list_frames]
+        def _normalize_each_channel(dataset):
+            for ch in range(dataset.shape[3]):
+                dataset[...,ch] = dataset[...,ch] - dataset[...,ch].min()
+                dataset[...,ch] = dataset[...,ch] / dataset[...,ch].max()
+            return dataset
 
-        if max_limit is not None:
-            list_frames = list_frames[:max_limit]
+        def _create_tensorflow_dataset(dataset, list_frames):
 
-        for i, filename in tqdm(enumerate(list_frames), desc='Loading the dataset'):
+            # tensorflow dataset from dataframe
+            tfdataset_data  = tf.data.Dataset.from_tensor_slices(dataset)
+            tfdataset_label = tf.data.Dataset.from_tensor_slices(dataset)
+            tfdataset = tf.data.Dataset.zip((tfdataset_data, tfdataset_label))
+            tfdataset.shuffle(seed=10, buffer_size=len(list_frames))
+            # tfdataset.batch(batch_size=32)
 
-            if i ==0:
-                dt = self.get_data(filename=filename)
-                dataset = np.zeros( (len(list_frames),) + dt.shape )
-                dataset[i,:,:,:] = dt
-            else:
+            # view the values in dataset
+            # for x in tfdataset.take(3):
+            #     print(x.shape)
 
-                dataset[i,:,:,:] = self.get_data(filename=filename)
+            return tfdataset
+
+        def _get_list_of_samples():
+            list_frames = glob(f'{self.dataset_directory}/{self.modality}/*.txt')
+
+            list_frames = [i.split(sep='/')[-1] for i in list_frames]
+
+            if max_limit is not None:
+                list_frames = list_frames[:max_limit]
+
+            return list_frames
+
+        def _get_dataset(list_frames):
+
+            for i, filename in tqdm(enumerate(list_frames), desc='Loading the dataset'):
+
+                if i ==0:
+                    dt = self.get_data(filename=filename)
+                    dataset = np.zeros( (len(list_frames),) + dt.shape )
+                    dataset[i,:,:,:] = dt
+                else:
+
+                    dataset[i,:,:,:] = self.get_data(filename=filename)
+
+            return dataset
 
 
-        if len(dataset.shape) == 3:
-            dataset = dataset[... , np.newaxis]
+        list_frames = _get_list_of_samples()
 
-        for ch in range(dataset.shape[3]):
-            dataset[...,ch] = dataset[...,ch] - dataset[...,ch].min()
-            dataset[...,ch] = dataset[...,ch] / dataset[...,ch].max()
+        dataset   = _get_dataset(list_frames)
 
+        dataset   = _add_channel_dimention(dataset)
 
-        # tensorflow dataset from dataframe
-        tfdataset_data  = tf.data.Dataset.from_tensor_slices(dataset)
-        tfdataset_label = tf.data.Dataset.from_tensor_slices(dataset)
+        dataset   = _normalize_each_channel(dataset)
 
-        tfdataset = tf.data.Dataset.zip((tfdataset_data, tfdataset_label))
-
-        tfdataset.shuffle(seed=10, buffer_size=len(list_frames))
-        # tfdataset.batch(batch_size=32)
-
-        # view the values in dataset
-        # for x in tfdataset.take(3):
-        #     print(x.shape)
+        tfdataset = _create_tensorflow_dataset(dataset, list_frames)
 
         return tfdataset, dataset
 
@@ -449,6 +470,24 @@ class MatrixInput(DataLoader, Optimization):
 
         data = namedtuple('data', ['train', 'valid', 'test'])
         return data(train=train, valid=valid, test=test)
+
+    @staticmethod
+    def extract_spherical_coordinates(sample: np.ndarray):
+        ''' sample input should be a 3D array with axes Elevation * Azimuth * Features
+        which Features is currently set to be [RCS, Ranage, 100/Range'''
+
+        # Find the non-zero coordinates in Range channel
+        non_zero_coordinates = np.nonzero(sample[:,:,0])
+
+        # get the values at the non zero coordinates
+        RCS      = sample[:,:,0][non_zero_coordinates]
+        Range    = sample[:,:,1][non_zero_coordinates]
+        invRange = sample[:,:,2][non_zero_coordinates]
+
+        return pd.DataFrame( non_zero_coordinates + (RCS, Range, invRange)  , index=['Elevation','Azimuth','RCS','Range', 'invRange']).T
+
+
+
 
     def view(self):
 
