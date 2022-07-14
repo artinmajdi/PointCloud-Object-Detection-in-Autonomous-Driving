@@ -12,7 +12,7 @@ from tensorflow.keras import layers, models, optimizers, datasets, metrics
 from collections import namedtuple
 from glob import glob
 import tensorflow as tf
-
+from tqdm import tqdm
 
 
 class Optimization():
@@ -58,10 +58,13 @@ class Optimization():
             input = layers.Input(shape=input_shape)
 
             # Encoder
-            x = layers.Conv2D(16, (3, 3), activation='relu', padding='same')(input)
+            x = layers.BatchNormalization()(input)
+            x = layers.Conv2D(16, (3, 3), activation='relu', padding='same')(x)
             x = layers.MaxPooling2D((2, 2), padding='same')(x)
+            x = layers.BatchNormalization()(x)
             x = layers.Conv2D(8, (3, 3), activation='relu', padding='same')(x)
             x = layers.MaxPooling2D((2, 2), padding='same')(x)
+            x = layers.BatchNormalization()(x)
             x = layers.Conv2D(8, (3, 3), activation='relu', padding='same')(x)
             encoded = layers.MaxPooling2D((2, 2), padding='same')(x)
 
@@ -69,11 +72,13 @@ class Optimization():
 
             x = layers.Conv2D(8, (3, 3), activation='relu', padding='same')(encoded)
             x = layers.UpSampling2D((2, 2))(x)
+            x = layers.BatchNormalization()(x)
             x = layers.Conv2D(8, (3, 3), activation='relu', padding='same')(x)
             x = layers.UpSampling2D((2, 2))(x)
+            x = layers.BatchNormalization()(x)
             x = layers.Conv2D(16, (3, 3), activation='relu')(x)
             x = layers.UpSampling2D((2, 2))(x)
-            decoded = layers.Conv2D(1, (3, 3), activation='sigmoid', padding='same')(x)
+            decoded = layers.Conv2D(input_shape[-1], (3, 3), activation='sigmoid', padding='same')(x)
 
             # Autoencoder
             model = models.Model(input, decoded)
@@ -209,20 +214,20 @@ class DataLoader():
 
         # Converting the dataframe to a matrix
         if self.data_type == 'matrix':
-            return self.vector_to_matrix_convertion(matrix_value='RCS')
+            return self.vector_to_matrix_convertion()
 
         return self.dataframe
 
 
-    def vector_to_matrix_convertion(self, matrix_value='RCS'):
-
+    def vector_to_matrix_convertion(self):
 
         # Creating an empty array to store the data
-        self.data_matrix = np.zeros( (self.SCALE_BIAS['Elevation'].Scale , self.SCALE_BIAS['Azimuth'].Scale) )
+        self.data_matrix = np.zeros( (self.SCALE_BIAS['Elevation'].Scale , self.SCALE_BIAS['Azimuth'].Scale , 3) )
 
         for _, row in self.dataframe.iterrows():
 
-            self.data_matrix[ int(row.Elevation) , int(row.Azimuth) ] = row[matrix_value] if isinstance(matrix_value,str) else matrix_value
+            # ToDo: Add 'Velocity' to the list of columns in Radar. This requires to make Radar and Lidar different dataframes
+            self.data_matrix[ int(row.Elevation) , int(row.Azimuth), : ] = [ row['RCS'] , row['Range'] , 100 / row['Range'] ] # 'Velocity'
 
         return self.data_matrix
 
@@ -254,7 +259,6 @@ class DataLoader():
         else:
             raiseExceptions('method should be either "open3d" or "pptk"')
 
-
     @staticmethod
     def converting_lidar_to_looklike_radar(dataframe: pd.DataFrame):
 
@@ -277,7 +281,6 @@ class DataLoader():
         df['Amplitude Index'] = np.power( df['RCS'] / 20.0 , 10 )
 
         return df
-
 
     @staticmethod
     def cartesian_to_spherical(x, y, z):
@@ -369,7 +372,7 @@ class MatrixInput(DataLoader, Optimization):
 
         self.data = self.split_dataset(tfdataset=tfdataset)
 
-        dataset /= 95
+        # dataset /= 100
         self.dataset = dataset
 
         # Getting the architecture of the model
@@ -378,7 +381,7 @@ class MatrixInput(DataLoader, Optimization):
 
         # Training the model
         # self.fit(epochs=5, batch_size=32, train=self.data.train, valid=self.data.valid)
-        self.fit(epochs=5, batch_size=32, train=dataset, valid=dataset)
+        self.fit(epochs=20, batch_size=16, train=dataset, valid=dataset)
 
         # Testing the model
         # self.predictions = self.predict(test=self.data.test)
@@ -394,14 +397,23 @@ class MatrixInput(DataLoader, Optimization):
         if max_limit is not None:
             list_frames = list_frames[:max_limit]
 
-        dataset = np.zeros( ( len(list_frames), self.SCALE_BIAS['Elevation'].Scale , self.SCALE_BIAS['Azimuth'].Scale ))
+        for i, filename in tqdm(enumerate(list_frames), desc='Loading the dataset'):
 
-        for i, filename in enumerate(list_frames):
+            if i ==0:
+                dt = self.get_data(filename=filename)
+                dataset = np.zeros( (len(list_frames),) + dt.shape )
+                dataset[i,:,:,:] = dt
+            else:
 
-            dataset[i,...] = self.get_data(filename=filename)
+                dataset[i,:,:,:] = self.get_data(filename=filename)
+
 
         if len(dataset.shape) == 3:
             dataset = dataset[... , np.newaxis]
+
+        for ch in range(dataset.shape[3]):
+            dataset[...,ch] = dataset[...,ch] - dataset[...,ch].min()
+            dataset[...,ch] = dataset[...,ch] / dataset[...,ch].max()
 
 
         # tensorflow dataset from dataframe
@@ -437,8 +449,6 @@ class MatrixInput(DataLoader, Optimization):
 
         data = namedtuple('data', ['train', 'valid', 'test'])
         return data(train=train, valid=valid, test=test)
-
-
 
     def view(self):
 
