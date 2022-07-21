@@ -8,7 +8,7 @@ clc; clear all; close all;
 % test = '0El0Az_25m_2021-06-22-12-31-08';
 
 
-num_frames = 20;
+num_frames = 100;
 
 for example = 1:5
     
@@ -17,7 +17,7 @@ for example = 1:5
     
     mkdir([folder_dir, '/Lidar_r/'])
     
-    for i = 1:num_frames
+    for i = 20:num_frames
         clc
         disp(['Example:',num2str(example),'  Frame:(',num2str(i),'/',num2str(num_frames),')'])
     
