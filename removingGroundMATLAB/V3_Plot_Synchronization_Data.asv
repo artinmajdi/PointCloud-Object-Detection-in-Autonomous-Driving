@@ -1,6 +1,35 @@
 close all; clear all; clc; colmap = parula;
 
-Dir = get_example_directory(1);
+
+example = 1;
+
+
+% Example 1
+switch example
+    case 1
+        data_dir = 'U:/ROS\20220329_Sys362_Nvidia_RoadData/256F2TX_RoadData';
+        test     = 'Downtown_University_2022-03-29-11-04-56_3';
+
+    case 2
+        
+        data_dir = 'U:/ROS/20220329_Sys362_Nvidia_RoadData/256F2TX_RoadData';
+        test     = 'Freeway_2022-03-29-11-17-15_1';
+% 
+% % Example 3
+% data_dir(3) = 'U:/ROS/20220329_Sys362_Nvidia_RoadData/256F2TX_RoadData';
+% test(3) = 'Urban_Costco_2022-03-29-11-32-55_2';
+% 
+% % Example 4
+% data_dir(4) = 'U:/ROS\20220329_Sys362_Nvidia_RoadData/256F2TX_RoadData';
+% test(4) = 'Downtown_University_2022-03-29-11-04-56_3';
+% 
+% % Example 5
+% data_dir(5) = 'U:/ROS/20220126_Sys363_LWSRQT2/256F2Tx\Dynamic/Away';
+% test(5) = 'Away_3_2022-01-26-09-57-10';
+
+
+
+Dir = [data_dir, '/' , test];
 
 % Dir = uigetdir('U:\ROS\'); % Data Directory
 
@@ -43,6 +72,3 @@ for i = 1%:size(radar_time,1)
     
     drawnow();
 end
-
-
-
