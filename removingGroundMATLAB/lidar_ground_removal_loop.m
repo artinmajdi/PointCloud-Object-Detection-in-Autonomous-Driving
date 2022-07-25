@@ -8,7 +8,7 @@ clc; clear all; close all;
 % test = '0El0Az_25m_2021-06-22-12-31-08';
 
 
-num_frames = 100;
+num_frames = 10000;
 
 for example = 1:5
     
@@ -22,7 +22,6 @@ for example = 1:5
         file_dir_in  = [folder_dir, '/Lidar/', num2str(i), '_.txt'];
         file_dir_out = [folder_dir, '/Lidar_r/', num2str(i), '_.txt'];
         lidar_r = removing_lidar_ground(file_dir_in, file_dir_out);
-        
     end
 
 end

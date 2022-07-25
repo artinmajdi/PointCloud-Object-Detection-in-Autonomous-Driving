@@ -2,23 +2,23 @@ close all; clear all; clc; colmap = parula;
 
 
 
-for example = 1:5
+for example = 5
 
-    Dir = get_example_directory(example);
+    [Dir,dataset_name] = get_example_directory(example);
     
     % Dir = uigetdir('U:\ROS\'); % Data Directory
     
-    radar_time = load([Dir '\Radar_time_tag.txt']); % Radar Time File
-    lidar_time = load([Dir '\Lidar_time_tag.txt']); % Lidar Time File
-    camera_time = load([Dir '\Camera_2_time_tag.txt']); %Camera Time File
+    radar_time = load([Dir '/Radar_time_tag.txt']); % Radar Time File
+    lidar_time = load([Dir '/Lidar_time_tag.txt']); % Lidar Time File
+    camera_time = load([Dir '/Camera_2_time_tag.txt']); %Camera Time File
     
     
-    v=VideoWriter([Dir,'\video.avi']);
+    v=VideoWriter([Dir,'/',dataset_name,'.avi']);
     v.FrameRate=2;
     v.Quality=100;
     open(v);
     
-    num_frames = 100; % size(radar_time,1)
+    num_frames = 50; % size(radar_time,1)
     close all;
 
     for i = 1:num_frames 
@@ -36,7 +36,7 @@ for example = 1:5
         catch
             continue
         end
-    
+        
     end
     
     close(v)
@@ -70,7 +70,7 @@ function visualize(Dir, i, radar_time, lidar_time , camera_time)
 
     hold on
 
-    scatter3(-lidar(:,2),lidar(:,1),lidar(:,3),3,'w','filled') % Plot Lidar Data
+    scatter3(lidar(:,1),lidar(:,2),lidar(:,3),3,'w','filled') % Plot Lidar Data
     hold off
 
     view(2) % Set View to BirdsEye
