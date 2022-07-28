@@ -8,9 +8,9 @@ clc; clear all; close all;
 % test = '0El0Az_25m_2021-06-22-12-31-08';
 
 
-num_frames = 10000;
+num_frames = 200;
 
-for example = 1:5
+for example = 1:4
     
     folder_dir = get_example_directory(example);    
     mkdir([folder_dir, '/Lidar_r/'])

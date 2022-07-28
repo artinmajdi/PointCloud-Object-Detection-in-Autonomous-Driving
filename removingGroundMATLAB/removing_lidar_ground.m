@@ -11,7 +11,7 @@ function lidar_r = removing_lidar_ground(file_dir_in, file_dir_out)
     
     % camera = imread([folder_dir, '/Camera/', num2str(i), '_.jpg']);
     
-    pc = pointCloud([x, y, z]);
+    pc = pointCloud([y, x, z]);
     groundPtsIdx = segmentGroundSMRF(pc);
     pc_ground_removed = select(pc, ~groundPtsIdx);
     xr = pc_ground_removed.Location(:, 1);
