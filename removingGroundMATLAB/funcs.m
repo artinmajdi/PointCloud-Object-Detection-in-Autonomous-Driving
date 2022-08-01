@@ -79,7 +79,7 @@ function v = write_settings(mode, dir, dataset_name)
 
     v=VideoWriter( [dir, '/', dataset_name, post_tag, '.avi'] );
     v.FrameRate=2;
-    v.Quality=50;
+    v.Quality=100;
     open(v);
 
 end
@@ -105,13 +105,13 @@ function visualize_radar_lidar_fused(dir, i, times)
 
 
     % ---------------------------Load Synchronized LIDAR w/wo background times ------------ %
-    [diff,ind] = min(abs(times.lidar(:,2)-times.radar(i,2))); % Find Synchronized Lidar Frame
-    lidar_r = load([dir '\Lidar_r\' num2str(ind) '_.txt']); % Load Lidar Frame
+    [~,ind_lidar] = min(abs(times.lidar(:,2)-times.radar(i,2))); % Find Synchronized Lidar Frame
+    lidar_r = load([dir '\Lidar_r\' num2str(ind_lidar) '_.txt']); % Load Lidar Frame
 
 
     % ---------------------------Load Synchronized CAMERA times --------------------------- %
-    [diff,ind] = min(abs(times.camera(:,2)-times.radar(i,2))); % Find Synchronized Camera Image
-    camera = imread([dir '\Camera\' num2str(ind) '_.jpg']); % Load Camera Image
+    [~,ind_camera] = min(abs(times.camera(:,2)-times.radar(i,2))); % Find Synchronized Camera Image
+    camera = imread([dir '\Camera\' num2str(ind_camera) '_.jpg']); % Load Camera Image
 
 
 
@@ -132,7 +132,7 @@ function visualize_radar_lidar_fused(dir, i, times)
         imshow(camera);
 
         % --------------------------------------------------------------------------------- %
-        sgtitle([dir '    Frame ' num2str(i) '/' num2str(ind)],'fontsize',15,'fontweight','bold','Interpreter', 'none')
+        sgtitle([dir '    Frame ' num2str(i) '/' num2str(ind_lidar)],'fontsize',15,'fontweight','bold','Interpreter', 'none')
 
 end
 
@@ -175,10 +175,10 @@ end
 function scatter3_plot(pointcloud, bird_view, mode)
     switch mode
         case 'radar'
-            scatter3(-pointcloud(:,4),pointcloud(:,3),pointcloud(:,5),10,pointcloud(:,9),'filled') %
+            scatter3(-pointcloud(:,4),pointcloud(:,3),pointcloud(:,5),10,pointcloud(:,9),'filled')
 
         case 'lidar'
-            scatter3(-pointcloud(:,2),pointcloud(:,1),pointcloud(:,3),3,'w','filled') % Plot Lidar Data
+            scatter3(-pointcloud(:,2),pointcloud(:,1),pointcloud(:,3),3,'white','filled')
             plotting_settings(bird_view)
     end
 end
@@ -187,7 +187,8 @@ function plotting_settings(bird_view)
 
     colmap = parula;
 
-    set(gca,'Color',[colmap(1,:)]);grid on;
+    set(gca,'Color',[colmap(1,:)]);
+    grid on;
     set(gca,'linewidth',2,'fontsize',15,'fontweight','bold');
 
     % Set View to BirdsEye
